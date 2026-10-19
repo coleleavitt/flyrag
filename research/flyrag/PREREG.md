@@ -72,3 +72,14 @@ Reported as met / not met per bar, with the numbers. A missed bar is reported as
 The benchmark is synthetic and built so lexical similarity is misleading; it shows the mechanism
 works when outcomes carry information that text does not, not how often that happens in real
 retrieval. A real-data evaluation (e.g. fixes labelled by later reverts) is future work.
+
+## Amendments
+
+### A1 (before any run): sign of the readout
+The readout formula above contradicts its own update rule. With `learned = (w_skip − w_use)/(P − F)`
+and "helped → depress the skip bank", a helpful document would *lose* score. The intent (the
+update section, and the mushroom body: dopamine depresses the synapses onto the output neuron that
+drives the opposite action) is that helped documents rise. Corrected:
+`learned(doc, q) = mean over the query's active units u of (w_use[u] − w_skip[u]) / (P − F)`.
+No other constant, arm, metric or bar changes. Found while writing the implementation; no
+evaluation code had run.
