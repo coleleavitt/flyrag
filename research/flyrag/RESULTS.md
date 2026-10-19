@@ -28,15 +28,35 @@ Run of the preregistered evaluation (`PREREG.md`, amendment A1), `flyrag_eval 20
   labels among the top 3 still leaves most "misled" labels on distractors, which carries some
   information. It met the preregistered bar; a stricter control (labels drawn independently of the
   documents) is future work and will be preregistered as such.
-- **Novelty: the continuous score separates in- from out-of-domain queries almost perfectly (AUC
-  0.997, secondary), the preregistered yes/no flag does not (0.507).** A flag AUC of 0.5 means the
-  flag fires at the same rate for both. Hypothesis (INFERRED, not tested): the "best overlap < 8 of
-  64" rule flags nearly every short (10-word) query against 40-word documents. Changing the
-  threshold now would be tuning on the evaluation seeds, which the preregistration forbids; a fix
-  will be chosen on the dev seeds (1000–1004) and re-tested as an amendment.
+- **Novelty: the preregistered yes/no flag missed its bar (AUC 0.507).** The continuous score's
+  AUC of 0.997 reported here was **inflated by a leak**: the in-domain probes had already been sent
+  during evaluation, so the filter had stored them. With fresh probes the score's AUC is 0.643; see
+  the follow-up below.
 - **No catastrophic forgetting:** learning 20 more topics kept 83% of the earlier gain.
 
 ## Limits
 Synthetic benchmark, built so that lexical similarity misleads. It shows the mechanism works when
 outcomes carry information the text does not; it says nothing yet about how often that happens on
 real data, and nothing about raw search quality against HNSW or learned embeddings.
+
+## Follow-up (amendments A2, A3)
+`flyrag_followup` (code committed at `953dafd`, before its first run). Raw output:
+`results/flyrag_followup{,_dev}.{md,json}`. Seeds 1–20 unless stated; 95% bootstrap CIs over seeds.
+
+| bar | value | verdict |
+|---|---|---|
+| 2b. independent − frozen < +0.01, or CI including 0 | −0.001 [−0.005, +0.003] | **met** |
+| 2c. learning − independent > 0, CI excluding 0 | +0.035 [+0.029, +0.042], d_z 2.43 | **met** |
+| 3 (re-test). flag AUC ≥ 0.90, fresh probes, flag chosen on dev seeds (t = 0.10, o = 4) | 0.637 [0.614, 0.658] | **not met** |
+| (secondary) continuous novelty score AUC, fresh probes | 0.643 [0.618, 0.669] | — |
+
+- **The learning gain is caused by the outcome signal.** The strict control gives the same
+  amount and mix of feedback (2.1% `helped`) with labels independent of the documents, and gains
+  nothing. The first run's shuffled control gained +0.007 because permuting labels among the top 3
+  keeps most `misled` labels on distractors.
+- **Novelty detection does not work on this benchmark.** Without the leak, a fresh in-domain query
+  looks almost as novel as an out-of-domain one (score AUC 0.643; the best flag on the dev seeds
+  reached 0.618). INFERRED reason: the filter stores past *queries*, and a new 10-word query
+  (random topic words plus common words, hashed with bigrams) activates a mostly new set of KC
+  units whatever its topic. Testing novelty against the stored *documents*, or on unigram codes,
+  would be a new preregistered design; neither is claimed here.
