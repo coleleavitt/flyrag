@@ -8,7 +8,7 @@
 use anyhow::{Result, bail};
 use kenyon::Rng;
 use kenyon_repro::flyrag_bench::{
-    Arm, OOD_Q, TOP_N, TOPICS, World, auc, evaluate, make_query, store, train, world,
+    Arm, TOP_N, TOPICS, auc, evaluate, novelty_probes, store, train, world,
 };
 use kenyon_repro::{out_dir, stats};
 use rayon::prelude::*;
@@ -19,18 +19,6 @@ struct Probe {
     ood: bool,
     novelty: f64,
     best: u32,
-}
-
-/// The 40 fresh in-domain probes (one per topic) and the 40 OOD queries, in a
-/// seeded random order (A2.1).
-fn probes(w: &World, seed: u64) -> Vec<(bool, String)> {
-    let mut rng = Rng::derive(seed, 0x5052_4f42); // "PROB"
-    let mut p: Vec<(bool, String)> = (0..TOPICS)
-        .map(|t| (false, make_query(&mut rng, &w.vocab, t)))
-        .collect();
-    p.extend(w.ood.iter().take(OOD_Q).map(|q| (true, q.clone())));
-    rng.shuffle(&mut p);
-    p
 }
 
 fn flag_auc(ps: &[Probe], t: f64, o: u32) -> f64 {
@@ -65,7 +53,7 @@ fn run_seed(seed: u64, arms: bool) -> Result<SeedResult> {
     let mut ndcg = [f64::NAN; 4];
     ndcg[0] = evaluate(&mut r, &w, &fix_of, &all)?.0;
     let mut ps = Vec::new();
-    for (ood, q) in probes(&w, seed) {
+    for (ood, q) in novelty_probes(&w, seed) {
         let a = r.query(&q, TOP_N)?;
         ps.push(Probe {
             ood,

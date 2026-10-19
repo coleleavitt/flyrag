@@ -50,6 +50,26 @@ impl TextEncoder {
         (h % self.dim as u64) as usize
     }
 
+    /// The distinct buckets `text`'s features fall in, sorted.
+    pub fn buckets(&self, text: &str) -> Vec<usize> {
+        let toks = Self::tokens(text);
+        let mut b: Vec<usize> = toks.iter().map(|t| self.bucket(&[t])).collect();
+        b.extend(toks.windows(2).map(|w| self.bucket(&[&w[0], &w[1]])));
+        b.sort_unstable();
+        b.dedup();
+        b
+    }
+
+    /// [`TextEncoder::encode`] with each bucket multiplied by `weights[b]`
+    /// (missing weights count as 1).
+    pub fn encode_weighted(&self, text: &str, weights: &[f32]) -> Vec<f32> {
+        let mut x = self.encode(text);
+        for (v, w) in x.iter_mut().zip(weights) {
+            *v *= w;
+        }
+        x
+    }
+
     /// The feature vector of `text`.
     pub fn encode(&self, text: &str) -> Vec<f32> {
         let toks = Self::tokens(text);

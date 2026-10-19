@@ -215,3 +215,15 @@ pub fn auc(pos: &[f64], neg: &[f64]) -> f64 {
     }
     s / (pos.len() * neg.len()) as f64
 }
+
+/// The 40 fresh in-domain probes (one per topic) and the 40 OOD queries, in a
+/// seeded random order (A2.1).
+pub fn novelty_probes(w: &World, seed: u64) -> Vec<(bool, String)> {
+    let mut rng = Rng::derive(seed, 0x5052_4f42); // "PROB"
+    let mut p: Vec<(bool, String)> = (0..TOPICS)
+        .map(|t| (false, make_query(&mut rng, &w.vocab, t)))
+        .collect();
+    p.extend(w.ood.iter().take(OOD_Q).map(|q| (true, q.clone())));
+    rng.shuffle(&mut p);
+    p
+}

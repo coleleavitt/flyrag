@@ -4,110 +4,29 @@
 //! (`corpus.jsonl`, `queries.jsonl`, `qrels/{train,test}.tsv`). Writes
 //! `results/flyrag_scifact.{md,json}`.
 
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::collections::HashSet;
 
-use anyhow::{Context, Result, ensure};
-use flyrag::{DocId, FlyRag, Outcome, RagParams, TextEncoder};
+use anyhow::{Result, ensure};
+use flyrag::{DocId, FlyRag, Outcome, RagParams};
 use kenyon::Rng;
+use kenyon_repro::scifact::{Bm25, Data, load, ndcg10};
 use kenyon_repro::{data_dir, out_dir, stats};
 use rayon::prelude::*;
 
 const TOP_N: usize = 10;
-const TRIED: usize = 3;
 
-struct Data {
-    /// Document texts (title + " " + abstract), in file order.
-    docs: Vec<String>,
-    /// Train and test queries: text and relevant document indices.
-    train: Vec<(String, HashSet<usize>)>,
-    test: Vec<(String, HashSet<usize>)>,
-}
-
-fn jsonl(path: &Path) -> Result<Vec<serde_json::Value>> {
-    let s = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    s.lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| Ok(serde_json::from_str(l)?))
+/// BM25's per-test-query nDCG@10.
+fn bm25(d: &Data) -> Vec<f64> {
+    let b = Bm25::new(&d.docs);
+    d.test
+        .iter()
+        .map(|(q, rel)| {
+            let ranked: Vec<usize> = b.rank(q, 10).into_iter().map(|c| c.0).collect();
+            ndcg10(&ranked, rel)
+        })
         .collect()
 }
-
-fn field(v: &serde_json::Value, k: &str) -> String {
-    v.get(k)
-        .and_then(|x| x.as_str())
-        .unwrap_or_default()
-        .to_owned()
-}
-
-fn load(dir: &Path) -> Result<Data> {
-    let mut docs = Vec::new();
-    let mut doc_ix = HashMap::new();
-    for v in jsonl(&dir.join("corpus.jsonl"))? {
-        doc_ix.insert(field(&v, "_id"), docs.len());
-        docs.push(format!("{} {}", field(&v, "title"), field(&v, "text")));
-    }
-    let queries: HashMap<String, String> = jsonl(&dir.join("queries.jsonl"))?
-        .iter()
-        .map(|v| (field(v, "_id"), field(v, "text")))
-        .collect();
-    let split = |name: &str| -> Result<Vec<(String, HashSet<usize>)>> {
-        let p = dir.join("qrels").join(name);
-        let s = std::fs::read_to_string(&p).with_context(|| format!("reading {}", p.display()))?;
-        // Keep file order of first appearance.
-        let mut order: Vec<String> = Vec::new();
-        let mut rel: HashMap<String, HashSet<usize>> = HashMap::new();
-        for line in s.lines().skip(1) {
-            let f: Vec<&str> = line.split('\t').collect();
-            ensure!(f.len() == 3, "bad qrels line {line:?}");
-            if f[2].trim().parse::<i32>().unwrap_or(0) <= 0 {
-                continue;
-            }
-            let d = *doc_ix
-                .get(f[1])
-                .with_context(|| format!("unknown doc {}", f[1]))?;
-            if !rel.contains_key(f[0]) {
-                order.push(f[0].to_owned());
-            }
-            rel.entry(f[0].to_owned()).or_default().insert(d);
-        }
-        order
-            .into_iter()
-            .map(|q| {
-                let text = queries
-                    .get(&q)
-                    .with_context(|| format!("unknown query {q}"))?
-                    .clone();
-                let r = rel.remove(&q).unwrap_or_default();
-                Ok((text, r))
-            })
-            .collect()
-    };
-    let train = split("train.tsv")?;
-    let test = split("test.tsv")?;
-    ensure!(
-        docs.len() == 5183 && train.len() == 809 && test.len() == 300,
-        "unexpected SciFact sizes: {} docs, {} train, {} test",
-        docs.len(),
-        train.len(),
-        test.len()
-    );
-    Ok(Data { docs, train, test })
-}
-
-/// nDCG@10 of a ranking with binary relevance.
-fn ndcg10(ranked: &[usize], rel: &HashSet<usize>) -> f64 {
-    let dcg: f64 = ranked
-        .iter()
-        .take(10)
-        .enumerate()
-        .filter(|(_, d)| rel.contains(d))
-        .map(|(i, _)| 1.0 / ((i + 2) as f64).log2())
-        .sum();
-    let ideal: f64 = (0..rel.len().min(10))
-        .map(|i| 1.0 / ((i + 2) as f64).log2())
-        .sum();
-    if ideal > 0.0 { dcg / ideal } else { 0.0 }
-}
+const TRIED: usize = 3;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Arm {
@@ -171,52 +90,6 @@ fn run_arm(d: &Data, seed: u64, arm: Arm) -> Result<(Vec<f64>, usize, usize)> {
         out.push(ndcg10(&ranked, rel));
     }
     Ok((out, helped, total))
-}
-
-/// BM25 (k1 0.9, b 0.4) over FlyRAG's unigram tokens; per-test-query nDCG@10.
-fn bm25(d: &Data) -> Vec<f64> {
-    let (k1, b) = (0.9, 0.4);
-    let toks: Vec<Vec<String>> = d.docs.iter().map(|t| TextEncoder::tokens(t)).collect();
-    let n = toks.len() as f64;
-    let avgdl = toks.iter().map(Vec::len).sum::<usize>() as f64 / n;
-    let mut df: HashMap<&str, f64> = HashMap::new();
-    let mut tf: Vec<HashMap<&str, f64>> = Vec::with_capacity(toks.len());
-    for t in &toks {
-        let mut m: HashMap<&str, f64> = HashMap::new();
-        for w in t {
-            *m.entry(w.as_str()).or_default() += 1.0;
-        }
-        for w in m.keys() {
-            *df.entry(w).or_default() += 1.0;
-        }
-        tf.push(m);
-    }
-    d.test
-        .iter()
-        .map(|(q, rel)| {
-            let qt: HashSet<String> = TextEncoder::tokens(q).into_iter().collect();
-            let mut scores: Vec<(usize, f64)> = tf
-                .iter()
-                .enumerate()
-                .map(|(i, m)| {
-                    let dl = toks[i].len() as f64;
-                    let s = qt
-                        .iter()
-                        .filter_map(|w| {
-                            let f = *m.get(w.as_str())?;
-                            let dfw = df.get(w.as_str()).copied().unwrap_or(0.0);
-                            let idf = (1.0 + (n - dfw + 0.5) / (dfw + 0.5)).ln();
-                            Some(idf * f * (k1 + 1.0) / (f + k1 * (1.0 - b + b * dl / avgdl)))
-                        })
-                        .sum();
-                    (i, s)
-                })
-                .collect();
-            scores.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
-            let ranked: Vec<usize> = scores.iter().take(10).map(|s| s.0).collect();
-            ndcg10(&ranked, rel)
-        })
-        .collect()
 }
 
 fn main() -> Result<()> {

@@ -41,6 +41,15 @@ pub enum Learned {
     Frozen,
 }
 
+/// What the novelty filter remembers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoveltySource {
+    /// Past queries: "have I been asked something like this?" (the prereg).
+    Queries,
+    /// Stored documents: "is there anything like this in the store?"
+    Documents,
+}
+
 /// Every constant (the prereg's values are [`RagParams::prereg`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RagParams {
@@ -62,6 +71,8 @@ pub struct RagParams {
     pub min_overlap: u32,
     /// Offers kept for feedback; older ones are evicted.
     pub max_offers: usize,
+    /// What the novelty filter is filled with.
+    pub novelty_source: NoveltySource,
     /// Seed for the encoder and the projection.
     pub seed: u64,
 }
@@ -79,6 +90,7 @@ impl RagParams {
             novelty_threshold: 0.8,
             min_overlap: 8,
             max_offers: 10_000,
+            novelty_source: NoveltySource::Queries,
             seed,
         }
     }
@@ -113,7 +125,8 @@ pub struct Ranked {
     pub overlap: u32,
     /// The learned term in [−1, 1].
     pub learned: f32,
-    /// `overlap / k + λ · learned`.
+    /// `overlap / k + λ · learned` from [`FlyRag::query`];
+    /// `base / max_base + λ · learned` from [`FlyRag::rerank`].
     pub score: f64,
 }
 
@@ -146,6 +159,8 @@ pub struct FlyRag {
     params: RagParams,
     encoder: TextEncoder,
     hasher: FlyHash,
+    /// Per-bucket feature weights (IDF), if fitted.
+    idf: Option<Vec<f32>>,
     index: FlyIndex,
     banks: Vec<Banks>,
     novelty: FlyBloom,
@@ -174,6 +189,7 @@ impl FlyRag {
             encoder: TextEncoder::new(params.dim, params.seed),
             index: FlyIndex::new(hasher.n_kc()),
             hasher,
+            idf: None,
             banks: Vec::new(),
             novelty,
             clock: 0,
@@ -210,12 +226,53 @@ impl FlyRag {
     }
 
     fn code(&self, text: &str) -> Result<KcCode> {
-        Ok(self.hasher.hash(&self.encoder.encode(text))?)
+        let x = match &self.idf {
+            Some(w) => self.encoder.encode_weighted(text, w),
+            None => self.encoder.encode(text),
+        };
+        Ok(self.hasher.hash(&x)?)
+    }
+
+    /// Weight every feature bucket by its IDF over `corpus`,
+    /// `ln(1 + (N − df + 0.5) / (df + 0.5))`, where `df` counts the texts
+    /// with any feature in that bucket. Must be called before any document
+    /// is added (codes depend on it); the corpus need not be what is added.
+    pub fn fit_idf<S: AsRef<str>>(&mut self, corpus: &[S]) -> Result<()> {
+        if !self.is_empty() {
+            return Err(invalid("idf", "fit before adding documents"));
+        }
+        if corpus.is_empty() {
+            return Err(invalid("idf", "corpus is empty"));
+        }
+        let mut df = vec![0u32; self.params.dim];
+        for t in corpus {
+            for b in self.encoder.buckets(t.as_ref()) {
+                df[b] += 1;
+            }
+        }
+        let n = corpus.len() as f64;
+        self.idf = Some(
+            df.into_iter()
+                .map(|d| {
+                    let d = f64::from(d);
+                    (1.0 + (n - d + 0.5) / (d + 0.5)).ln() as f32
+                })
+                .collect(),
+        );
+        Ok(())
+    }
+
+    /// `true` once [`FlyRag::fit_idf`] has run.
+    pub fn has_idf(&self) -> bool {
+        self.idf.is_some()
     }
 
     /// Add a document.
     pub fn add(&mut self, text: &str) -> Result<DocId> {
         let code = self.code(text)?;
+        if self.params.novelty_source == NoveltySource::Documents {
+            self.novelty.insert_code(&code)?;
+        }
         let id = self.index.insert(code)?;
         if id as usize != self.banks.len() {
             return Err(FlyRagError::Full);
@@ -224,26 +281,87 @@ impl FlyRag {
         Ok(DocId(id))
     }
 
-    /// Rank the documents for `text`, keep the offer for feedback, and record
-    /// the query in the novelty filter.
+    /// Rank the documents for `text` by code overlap plus the learned term,
+    /// and keep the offer for feedback. With [`NoveltySource::Queries`] the
+    /// query is recorded in the novelty filter.
     pub fn query(&mut self, text: &str, top_n: usize) -> Result<Answer> {
+        let k = self.params.k as f64;
+        self.answer(text, top_n, |cands| {
+            cands
+                .iter()
+                .map(|&(id, ov)| (id, f64::from(ov) / k))
+                .collect()
+        })
+    }
+
+    /// Re-rank another retriever's `candidates` (document, base score; higher
+    /// is better): score `base / max_base + λ · learned`. The offer is the
+    /// re-ranked top `top_n`, so [`FlyRag::feedback`] works as for
+    /// [`FlyRag::query`]. Unknown documents are an error.
+    pub fn rerank(
+        &mut self,
+        text: &str,
+        candidates: &[(DocId, f64)],
+        top_n: usize,
+    ) -> Result<Answer> {
+        if let Some(&(d, _)) = candidates.iter().find(|(d, _)| d.0 as usize >= self.len()) {
+            return Err(invalid("candidates", format!("unknown document {}", d.0)));
+        }
+        let max = candidates
+            .iter()
+            .map(|c| c.1)
+            .filter(|v| v.is_finite())
+            .fold(0.0f64, f64::max);
+        self.answer(text, top_n, |_| {
+            candidates
+                .iter()
+                .map(|&(d, b)| {
+                    (
+                        d.0,
+                        if max > 0.0 && b.is_finite() {
+                            b / max
+                        } else {
+                            0.0
+                        },
+                    )
+                })
+                .collect()
+        })
+    }
+
+    /// Shared by `query` and `rerank`: `base` maps the overlap candidates
+    /// (id, overlap) to the (id, base score) list to rank.
+    fn answer(
+        &mut self,
+        text: &str,
+        top_n: usize,
+        base: impl FnOnce(&[(u32, u32)]) -> Vec<(u32, f64)>,
+    ) -> Result<Answer> {
         let code = self.code(text)?;
         let novelty = self.novelty.novelty_code(&code)?;
-        self.novelty.insert_code(&code)?;
+        if self.params.novelty_source == NoveltySource::Queries {
+            self.novelty.insert_code(&code)?;
+        }
         let units = code.indices().to_vec();
-        let k = self.params.k as f64;
         let rp = self.params.readout;
-        let candidates = self.index.query_overlap(&code, self.index.len())?;
-        let best = candidates.first().map_or(0, |h| h.score as u32);
-        let mut hits: Vec<Ranked> = candidates
+        let cands: Vec<(u32, u32)> = self
+            .index
+            .query_overlap(&code, self.index.len())?
             .into_iter()
-            .map(|h| {
-                let learned = self.banks[h.id as usize].learned(&rp, &units, self.clock);
+            .map(|h| (h.id, h.score as u32))
+            .collect();
+        let best = cands.first().map_or(0, |c| c.1);
+        let overlap: HashMap<u32, u32> = cands.iter().copied().collect();
+        let lambda = f64::from(self.params.lambda);
+        let mut hits: Vec<Ranked> = base(&cands)
+            .into_iter()
+            .map(|(id, b)| {
+                let learned = self.banks[id as usize].learned(&rp, &units, self.clock);
                 Ranked {
-                    doc: DocId(h.id),
-                    overlap: h.score as u32,
+                    doc: DocId(id),
+                    overlap: overlap.get(&id).copied().unwrap_or(0),
                     learned,
-                    score: h.score / k + f64::from(self.params.lambda) * f64::from(learned),
+                    score: b + lambda * f64::from(learned),
                 }
             })
             .collect();
