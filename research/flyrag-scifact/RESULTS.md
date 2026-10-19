@@ -1,7 +1,7 @@
 # FlyRAG on BEIR SciFact: results
 
 Run of `PREREG.md` (`flyrag_scifact 20`; code committed at `953dafd` before its first run). Raw
-output: `results/flyrag_scifact.{md,json,log}`. Per-query nDCG@10 averaged over 20 seeds; 95%
+output: `results/flyrag_scifact.{md,json}` (the run log is local; `*.log` is ignored). Per-query nDCG@10 averaged over 20 seeds; 95%
 bootstrap CIs over the 300 test queries.
 
 | system | nDCG@10, all 300 | unseen 104 | seen 196 |
