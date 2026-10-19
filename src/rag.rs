@@ -126,6 +126,9 @@ pub struct Answer {
     pub hits: Vec<Ranked>,
     /// Fly Bloom novelty of the query, in [0, 1] (1 = nothing like it seen).
     pub novelty: f64,
+    /// The largest code overlap of any stored document (0 if none), before
+    /// ranking and truncation.
+    pub best_overlap: u32,
     /// Flagged novel: high novelty, or nothing in the store overlaps enough.
     pub novel: bool,
 }
@@ -267,6 +270,7 @@ impl FlyRag {
             offer: OfferId(id),
             hits,
             novelty,
+            best_overlap: best,
             novel: novelty >= self.params.novelty_threshold || best < self.params.min_overlap,
         })
     }
