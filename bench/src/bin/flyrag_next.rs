@@ -9,10 +9,10 @@ use std::collections::HashSet;
 
 use anyhow::{Result, ensure};
 use flyrag::{DocId, FlyRag, NoveltySource, Outcome, RagParams};
+use flyrag_bench::scifact::{Bm25, Data, load, ndcg10};
+use flyrag_bench::synthetic::{self, auc, novelty_probes};
+use flyrag_bench::{data_dir, out_dir, stats};
 use kenyon::Rng;
-use kenyon_repro::flyrag_bench::{self, auc, novelty_probes};
-use kenyon_repro::scifact::{Bm25, Data, load, ndcg10};
-use kenyon_repro::{data_dir, out_dir, stats};
 use rayon::prelude::*;
 
 const TOP_N: usize = 10;
@@ -239,7 +239,7 @@ fn main() -> Result<()> {
     let s3: Vec<(f64, f64)> = seeds
         .par_iter()
         .map(|&s| -> Result<(f64, f64)> {
-            let w = flyrag_bench::world(s);
+            let w = synthetic::world(s);
             let mut p = RagParams::prereg(s);
             p.novelty_source = NoveltySource::Documents;
             let mut r = FlyRag::new(p)?;

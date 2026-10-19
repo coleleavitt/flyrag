@@ -1,0 +1,17 @@
+[package]
+name = "flyrag-bench"
+version = "0.0.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "FlyRAG's preregistered evaluations (not published)."
+
+[lints]
+workspace = true
+
+[dependencies]
+flyrag = { path = ".." }
+kenyon = { workspace = true }
+anyhow = "1"
+rayon = "1"
+serde_json = "1"

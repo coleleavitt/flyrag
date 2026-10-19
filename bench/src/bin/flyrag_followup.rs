@@ -6,11 +6,11 @@
 //! "independent" control (A2.3). Writes `results/flyrag_followup[_dev].{md,json}`.
 
 use anyhow::{Result, bail};
-use kenyon::Rng;
-use kenyon_repro::flyrag_bench::{
+use flyrag_bench::synthetic::{
     Arm, TOP_N, TOPICS, auc, evaluate, novelty_probes, store, train, world,
 };
-use kenyon_repro::{out_dir, stats};
+use flyrag_bench::{out_dir, stats};
+use kenyon::Rng;
 use rayon::prelude::*;
 
 /// One novelty probe: out-of-domain?, novelty, best overlap.

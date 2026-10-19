@@ -1,0 +1,61 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+# rust-toolchain.toml pins the operator's local `rustc-master` build, which CI
+# runners don't have; RUSTUP_TOOLCHAIN overrides that file per job.
+# kenyon is a private git dependency: KENYON_DEPLOY_KEY is a read-only deploy
+# key on github.com/coleleavitt/kenyon.
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+    steps:
+      - uses: actions/checkout@v4
+      - &key
+        name: kenyon deploy key
+        shell: bash
+        env:
+          KEY: ${{ secrets.KENYON_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" >> ~/.ssh/known_hosts
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: RUSTDOCFLAGS="-D warnings" cargo doc -p flyrag --no-deps
+      - run: scripts/check_deps.sh
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+    steps:
+      - uses: actions/checkout@v4
+      - *key
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo test --workspace
+
+  msrv:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: "1.85.0"
+    steps:
+      - uses: actions/checkout@v4
+      - *key
+      - uses: dtolnay/rust-toolchain@1.85.0
+      - run: cargo test -p flyrag

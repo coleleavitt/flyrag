@@ -8,9 +8,9 @@ use std::collections::HashSet;
 
 use anyhow::{Result, ensure};
 use flyrag::{DocId, FlyRag, Outcome, RagParams};
+use flyrag_bench::scifact::{Bm25, Data, load, ndcg10};
+use flyrag_bench::{data_dir, out_dir, stats};
 use kenyon::Rng;
-use kenyon_repro::scifact::{Bm25, Data, load, ndcg10};
-use kenyon_repro::{data_dir, out_dir, stats};
 use rayon::prelude::*;
 
 const TOP_N: usize = 10;

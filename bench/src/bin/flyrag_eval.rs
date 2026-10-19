@@ -4,9 +4,9 @@
 //! `results/flyrag.json` and prints the markdown report.
 
 use anyhow::Result;
+use flyrag_bench::synthetic::{Arm, OOD_Q, TOP_N, TOPICS, auc, evaluate, store, train, world};
+use flyrag_bench::{out_dir, stats};
 use kenyon::Rng;
-use kenyon_repro::flyrag_bench::{Arm, OOD_Q, TOP_N, TOPICS, auc, evaluate, store, train, world};
-use kenyon_repro::{out_dir, stats};
 use rayon::prelude::*;
 
 #[derive(Default, Clone)]

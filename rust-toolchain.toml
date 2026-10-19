@@ -1,0 +1,5 @@
+[toolchain]
+# rustc master build (installed via rustup-toolchain-install-master, not a rustup channel).
+# Reinstall with: rustup-toolchain-install-master -n rustc-master -c rustfmt -c clippy
+channel = "rustc-master"
+components = ["rustfmt", "clippy"]

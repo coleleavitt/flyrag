@@ -1,0 +1,4 @@
+/target
+MEMORY.md
+# The project .claude/ tree is shared policy (the global gitignore ignores .claude/).
+!.claude/

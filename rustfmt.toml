@@ -1,0 +1,2 @@
+# Repo-local so CI and every machine format alike (overrides ~/.rustfmt.toml).
+style_edition = "2024"
