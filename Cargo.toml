@@ -1,0 +1,18 @@
+[package]
+name = "flyrag"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT OR Apache-2.0"
+description = "Retrieval that learns from verified usefulness, built on the fly mushroom body: sparse KC codes, opposing use/skip readout banks, bounded prediction-error updates, novelty flags."
+keywords = ["retrieval", "rag", "continual-learning", "novelty-detection", "bio-inspired"]
+categories = ["algorithms", "text-processing"]
+readme = "README.md"
+publish = false # the operator decides on crates.io publication
+
+[lints]
+workspace = true
+
+[dependencies]
+kenyon = { path = ".." }
+thiserror = "2"
