@@ -83,3 +83,32 @@ drives the opposite action) is that helped documents rise. Corrected:
 `learned(doc, q) = mean over the query's active units u of (w_use[u] − w_skip[u]) / (P − F)`.
 No other constant, arm, metric or bar changes. Found while writing the implementation; no
 evaluation code had run.
+
+### A2 (after the first run, before any follow-up run): novelty re-test and a stricter control
+The first run's results stand as reported (`RESULTS.md`). This amendment adds a follow-up,
+`flyrag_followup`, run on the same benchmark and seeds. Bars 1, 4 and 5 are not re-tested.
+
+**A2.1 The novelty measurement leaked.** In the first run, the in-domain novelty probes were
+evaluation queries that `evaluate` had already sent, so the filter had stored them and their
+novelty was exactly 0. The continuous score's AUC (0.997) is therefore inflated, and the flag's
+in-domain rate was set by the overlap rule alone. Fix: the in-domain probes are 40 *fresh* queries
+(one per topic, same generator, drawn from a separate seeded stream so the world is unchanged).
+They are mixed with the 40 out-of-domain queries in a seeded random order and each is sent once,
+to the learning arm's store after its evaluation. Out-of-domain probes are the positives.
+
+**A2.2 Choosing the flag on the dev seeds.** On seeds 1000–1004 only, sweep the flag
+`novel = novelty ≥ t or best_overlap < o` over `t ∈ {0.05, 0.10, …, 1.00, off}` and
+`o ∈ {0, 1, 2, 4, 6, 8}`. Pick the pair with the highest mean flag AUC over the five dev seeds;
+ties go to the smaller `o`, then to the `t` closest to the preregistered 0.8. The chosen pair is
+committed as amendment A3 before the evaluation seeds run. Then bar 3 (flag AUC ≥ 0.90) is
+re-tested once on seeds 1–20 with that pair, and the continuous score's AUC is re-reported. The
+first run's 0.507 remains the preregistered result for bar 3; this is a second, separate test.
+
+**A2.3 A stricter shuffled control, "independent".** Each of the top 3 tried documents gets
+`helped` with probability `p_s` and `misled` otherwise, drawn independently of which document it
+is. `p_s` is the fraction of `helped` labels the learning arm gave in seed `s` (same amount and
+mix of feedback, no document–outcome link). Bars, paired over seeds 1–20 with 95% bootstrap CIs
+(10,000 resamples):
+- **2b:** independent − frozen nDCG@10 < +0.01, or its CI includes 0 (the control is clean).
+- **2c:** learning − independent nDCG@10 > 0 with its CI excluding 0 (the outcome's information
+  adds to whatever generic feedback does).
