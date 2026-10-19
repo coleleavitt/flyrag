@@ -112,3 +112,9 @@ mix of feedback, no document–outcome link). Bars, paired over seeds 1–20 wit
 - **2b:** independent − frozen nDCG@10 < +0.01, or its CI includes 0 (the control is clean).
 - **2c:** learning − independent nDCG@10 > 0 with its CI excluding 0 (the outcome's information
   adds to whatever generic feedback does).
+
+### A3 (after the dev sweep, before the evaluation seeds): the chosen flag
+The A2.2 sweep on dev seeds 1000–1004 (`results/flyrag_followup_dev.md`) chose **t = 0.10,
+o = 4** (mean dev flag AUC 0.618). Noted before the evaluation run: with the A2.1 leak fixed, the
+continuous novelty score's dev AUC is 0.588, so bar 3 is not expected to be met. The design is not
+changed in response; `flyrag_followup eval 0.10 4` runs once on seeds 1–20.
