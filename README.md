@@ -44,7 +44,7 @@ What it does **not** claim: better raw search than BM25, HNSW or learned embeddi
 - `research/`: preregistrations and results; `results/`: raw outputs.
 - `scripts/ci.sh` (the CI checks), `scripts/reproduce.sh` (every study; byte-identical outputs).
 
-kenyon is a private git dependency pinned by rev until it is published. History before the split
+kenyon is a public git dependency, pinned by rev until it is on crates.io. History before the split
 lives in kenyon (`github.com/coleleavitt/kenyon`, up to `70ed335`).
 
 ## License

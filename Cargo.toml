@@ -21,7 +21,7 @@ unwrap_used = "deny"
 
 [workspace.dependencies]
 # kenyon is a private repo until it is published; pinned by rev. Bump it deliberately.
-kenyon = { git = "ssh://git@github.com/coleleavitt/kenyon.git", rev = "a6fbb0474071d813b63bb7ea4852e56967e61e32" }
+kenyon = { git = "https://github.com/coleleavitt/kenyon.git", rev = "a6fbb0474071d813b63bb7ea4852e56967e61e32" }
 
 [lints]
 workspace = true

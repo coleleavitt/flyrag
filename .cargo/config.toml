@@ -1,3 +1,0 @@
-[net]
-# kenyon is fetched over ssh with the system git (agent, deploy key in CI).
-git-fetch-with-cli = true

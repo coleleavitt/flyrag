@@ -1,6 +1,5 @@
 # security (flyrag)
-- No secrets in the repo, results or CI logs. CI reads kenyon with the read-only deploy key secret
-  `KENYON_DEPLOY_KEY`; never print it.
+- No secrets in the repo, results or CI logs. kenyon is public and fetched over https; CI needs no keys.
 - Datasets live outside the repo (`~/datasets`), with source URL and sha256 in the study's PREREG.
   Never load pickle files.
 - The only git dependency is kenyon, pinned by rev. Other dependencies come from crates.io with the
