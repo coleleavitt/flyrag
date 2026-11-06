@@ -173,6 +173,11 @@ pub struct FlyRag {
     idf: Option<Vec<f32>>,
     index: FlyIndex,
     banks: Vec<Banks>,
+    /// Each document's KC unit indices, preserved after tombstoning so
+    /// detached feedback can still train the readout from supersede events.
+    /// Parallel to `banks`.
+    #[cfg_attr(feature = "serde", serde(default))]
+    doc_units: Vec<Vec<u32>>,
     novelty: FlyBloom,
     clock: u64,
     offers: HashMap<u64, Offer>,
@@ -201,6 +206,7 @@ impl FlyRag {
             hasher,
             idf: None,
             banks: Vec::new(),
+            doc_units: Vec::new(),
             novelty,
             clock: 0,
             offers: HashMap::new(),
@@ -283,11 +289,13 @@ impl FlyRag {
         if self.params.novelty_source == NoveltySource::Documents {
             self.novelty.insert_code(&code)?;
         }
+        let units = code.indices().to_vec();
         let id = self.index.insert(code)?;
         if id as usize != self.banks.len() {
             return Err(FlyRagError::Full);
         }
         self.banks.push(Banks::default());
+        self.doc_units.push(units);
         Ok(DocId(id))
     }
 
@@ -438,6 +446,55 @@ impl FlyRag {
         }
         let step = (rp.eta * delta.abs()).min(rp.cap);
         banks.depress(&rp, bank, &o.units, step, self.clock);
+        Ok(Learned::Updated { delta, step })
+    }
+
+    /// A verified outcome for `doc` with no active offer to attribute it
+    /// to: the readout learns on the document's OWN KC units (the units
+    /// that fired for it when it was added) rather than a query's. Use
+    /// this from a background signal — a cert-stream supersede, a
+    /// verified failure-ledger match, a user correction that specifically
+    /// cites the memory — when the offer window has already moved on.
+    ///
+    /// Semantically: regular `feedback()` learns "for queries that fire
+    /// these units, doc X is good/bad." `feedback_detached()` learns
+    /// "for queries that resemble doc X itself, doc X is good/bad." It
+    /// is a weaker update — it can only hurt or help queries whose
+    /// activations overlap the doc's own code — but that is precisely
+    /// what a supersede or an endorsement cite describes: the doc, not a
+    /// matching query.
+    ///
+    /// Never errors on offer bookkeeping — there is none. An unknown or
+    /// already-tombstoned doc is `UnknownDocument`. Learning off returns
+    /// `Learned::Frozen`. The bounded-update discipline (prediction-error
+    /// `delta`, step cap, floor clamp, lazy decay) is identical to
+    /// `feedback()`, so a cert-stream ingest cannot thrash the readout.
+    pub fn feedback_detached(&mut self, doc: DocId, outcome: Outcome) -> Result<Learned> {
+        let idx = doc.0 as usize;
+        let Some(units) = self.doc_units.get(idx).cloned() else {
+            return Err(FlyRagError::UnknownDocument(doc.0));
+        };
+        if units.is_empty() {
+            // The doc was added when IDF zeroed every bucket, so no KC
+            // unit ever fired for it. Nothing to depress.
+            return Ok(Learned::Expected);
+        }
+        if !self.learning {
+            return Ok(Learned::Frozen);
+        }
+        let rp = self.params.readout;
+        let banks = &mut self.banks[idx];
+        let expected = banks.learned(&rp, &units, self.clock);
+        let (target, bank) = match outcome {
+            Outcome::Helped => (1.0, Bank::Skip),
+            Outcome::Misled => (-1.0, Bank::Use),
+        };
+        let delta = target - expected;
+        if delta.abs() < rp.min_delta {
+            return Ok(Learned::Expected);
+        }
+        let step = (rp.eta * delta.abs()).min(rp.cap);
+        banks.depress(&rp, bank, &units, step, self.clock);
         Ok(Learned::Updated { delta, step })
     }
 

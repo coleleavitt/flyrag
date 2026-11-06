@@ -37,6 +37,10 @@ pub enum FlyRagError {
     /// The store holds as many documents as a `u32` id can name.
     #[error("the store is full")]
     Full,
+    /// [`crate::FlyRag::feedback_detached`] received a doc id that was
+    /// never [`crate::FlyRag::add`]ed.
+    #[error("unknown document {0}")]
+    UnknownDocument(u32),
 }
 
 /// Result alias.

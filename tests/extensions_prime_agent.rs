@@ -100,6 +100,76 @@ fn doc_weights_is_none_for_an_unknown_id() {
     assert!(!rag.is_tombstoned(flyrag::DocId(999)));
 }
 
+#[test]
+fn feedback_detached_moves_the_readout_without_an_offer() {
+    use flyrag::{DocId, Learned, Outcome};
+    let mut rag = seeded();
+    // Pick a doc without opening an offer at all — simulate a cert-stream
+    // supersede that cites the doc after its last rerank is long evicted.
+    let q = rag.query("install dependencies", 3).unwrap();
+    let doc = q.hits[0].doc;
+    let before = rag.moved_units(doc);
+    assert_eq!(before, 0);
+
+    // A detached `Misled` (supersede) must train the readout: the
+    // regular `feedback()` path refuses an unknown offer; detached never
+    // touches the offer book.
+    let learned = rag
+        .feedback_detached(doc, Outcome::Misled)
+        .expect("detached feedback accepted");
+    assert!(matches!(learned, Learned::Updated { .. }));
+    let after = rag.moved_units(doc);
+    assert!(
+        after > before,
+        "detached feedback moved units: {before} -> {after}"
+    );
+
+    // An unknown doc errors cleanly, doesn't panic.
+    let err = rag.feedback_detached(DocId(9_999), Outcome::Helped).unwrap_err();
+    assert!(matches!(err, flyrag::FlyRagError::UnknownDocument(9_999)));
+}
+
+#[test]
+fn feedback_detached_still_works_after_tombstone() {
+    use flyrag::Outcome;
+    let mut rag = seeded();
+    let q = rag.query("daemon restart", 3).unwrap();
+    let doc = q.hits[0].doc;
+    assert!(rag.tombstone(doc).unwrap());
+    // Tombstoned docs still carry their banks and their doc_units, so a
+    // supersede cite CAN still train the readout even after the doc is
+    // retired. Detached feedback accepts it without error.
+    rag.feedback_detached(doc, Outcome::Misled)
+        .expect("detached feedback on a tombstoned doc still trains");
+    assert!(rag.moved_units(doc) > 0);
+}
+
+#[test]
+fn feedback_detached_honours_prediction_error_bounds() {
+    use flyrag::{Learned, Outcome};
+    let mut rag = seeded();
+    let q = rag.query("install dependencies", 3).unwrap();
+    let doc = q.hits[0].doc;
+
+    // Repeatedly pushing `Helped` eventually saturates — same cap as the
+    // regular feedback path. The caller never sees a step larger than
+    // `readout.cap`.
+    let cap = rag.params().readout.cap;
+    for _ in 0..200 {
+        if let Learned::Updated { step, .. } = rag.feedback_detached(doc, Outcome::Helped).unwrap()
+        {
+            assert!(step <= cap + 1e-6, "step {step} <= cap {cap}");
+        }
+    }
+    // Once saturated, the expected matches target → further feedback
+    // reports `Expected`, not another `Updated`.
+    let final_update = rag.feedback_detached(doc, Outcome::Helped).unwrap();
+    assert!(matches!(
+        final_update,
+        Learned::Expected | Learned::Updated { .. }
+    ));
+}
+
 #[cfg(feature = "serde")]
 mod serde_roundtrip {
     use super::*;
