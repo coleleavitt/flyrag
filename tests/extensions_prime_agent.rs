@@ -141,6 +141,48 @@ fn compact_reclaims_tombstoned_docs_and_remaps_live_ids() {
     assert!(rag.moved_units(survivor_b_new) > moved_before);
 }
 
+/// Regression: a state file written BEFORE `doc_units` existed loads
+/// with `doc_units: []` (via `#[serde(default)]`). If a caller then
+/// runs `feedback_detached`, the bug was: unit lookup only works for
+/// the one slot at index 0 (which doesn't exist yet when banks are
+/// non-empty) — so every detached feedback silently returns
+/// UnknownDocument. `ensure_doc_units()` rebuilds from the stored
+/// FlyIndex so every bank has its units back.
+#[cfg(feature = "serde")]
+#[test]
+fn ensure_doc_units_rebuilds_from_the_index_after_a_stale_load() {
+    use flyrag::{DocId, Outcome};
+    let rag = seeded();
+    // Simulate a stale state file: manually serialise, then hand-drop
+    // the `doc_units` field, then deserialise. The result is what an
+    // older state file looks like today.
+    let mut stale = serde_json::to_value(&rag).unwrap();
+    stale["doc_units"] = serde_json::json!([]);
+    let json_str = serde_json::to_string(&stale).unwrap();
+    let mut back: flyrag::FlyRag = serde_json::from_str(&json_str).unwrap();
+    // feedback_detached on any live doc errors — doc_units is empty.
+    let err = back
+        .feedback_detached(DocId(1), Outcome::Helped)
+        .unwrap_err();
+    assert!(matches!(err, flyrag::FlyRagError::UnknownDocument(1)));
+
+    // Run the migration; subsequent feedback_detached trains.
+    let added = back.ensure_doc_units();
+    assert_eq!(added, 4, "rebuilt doc_units for all 4 memories");
+    back.feedback_detached(DocId(1), Outcome::Helped).unwrap();
+    assert!(back.moved_units(DocId(1)) > 0);
+
+    // The rebuilt units match what `seeded` would have written on
+    // fresh add: `rag` and `back` are byte-identical from here on.
+    assert_eq!(
+        rag.doc_weights(DocId(0)),
+        back.doc_weights(DocId(0))
+    );
+
+    // Second call is a no-op (already in sync).
+    assert_eq!(back.ensure_doc_units(), 0);
+}
+
 #[test]
 fn feedback_detached_moves_the_readout_without_an_offer() {
     use flyrag::{DocId, Learned, Outcome};

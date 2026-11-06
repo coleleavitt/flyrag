@@ -449,6 +449,40 @@ impl FlyRag {
         Ok(Learned::Updated { delta, step })
     }
 
+    /// Rebuild `doc_units` from the stored index when the two have
+    /// fallen out of sync — the serde round-trip case, because
+    /// `doc_units` was added after `banks` and is `#[serde(default)]`
+    /// so an older state file deserialises with an empty vec. Returns
+    /// the number of slots filled; `0` means doc_units was already
+    /// correct. Safe to call repeatedly; a no-op once the vectors
+    /// match.
+    ///
+    /// Tombstoned docs get an empty units vec — `feedback_detached`
+    /// on them then reports `Learned::Expected` instead of silently
+    /// training on another doc's slot.
+    pub fn ensure_doc_units(&mut self) -> usize {
+        if self.doc_units.len() == self.banks.len() {
+            return 0;
+        }
+        let n = self.banks.len();
+        let mut rebuilt: Vec<Vec<u32>> = Vec::with_capacity(n);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "FlyRag caps doc count at u32::MAX via FlyRagError::Full, so a u32 id covers every slot"
+        )]
+        for i in 0..n {
+            let id = i as u32;
+            let units = self
+                .index
+                .get(id)
+                .map_or_else(Vec::new, |code| code.indices().to_vec());
+            rebuilt.push(units);
+        }
+        let added = rebuilt.len().saturating_sub(self.doc_units.len());
+        self.doc_units = rebuilt;
+        added
+    }
+
     /// A verified outcome for `doc` with no active offer to attribute it
     /// to: the readout learns on the document's OWN KC units (the units
     /// that fired for it when it was added) rather than a query's. Use
