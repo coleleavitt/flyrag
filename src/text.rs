@@ -7,6 +7,7 @@
 
 /// A seeded, hashing text encoder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct TextEncoder {
     dim: usize,
     seed: u64,

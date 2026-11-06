@@ -10,6 +10,7 @@ use std::collections::HashMap;
 
 /// Readout constants (the prereg's values are [`ReadoutParams::PREREG`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ReadoutParams {
     /// Prior bank weight `P`.
     pub prior: f32,
@@ -39,13 +40,15 @@ impl ReadoutParams {
 
 /// One bank weight with the clock it was last set at (decay is lazy).
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct Cell {
-    w: f32,
-    at: u64,
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub(crate) struct Cell {
+    pub(crate) w: f32,
+    pub(crate) at: u64,
 }
 
 /// Which bank an outcome depresses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub(crate) enum Bank {
     Use,
     Skip,
@@ -53,6 +56,7 @@ pub(crate) enum Bank {
 
 /// A document's two banks; untouched units are implicitly at the prior.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub(crate) struct Banks {
     use_w: HashMap<u32, Cell>,
     skip_w: HashMap<u32, Cell>,
@@ -116,6 +120,25 @@ impl Banks {
                 .count()
         };
         off(&self.use_w) + off(&self.skip_w)
+    }
+
+    /// Current weights for `(use, skip)` on every stored unit, after decay.
+    /// Untouched units are not included — a reader sees exactly the units
+    /// a `feedback()` call has ever moved. Ordered by unit index ascending.
+    pub(crate) fn weights_by_unit(
+        &self,
+        p: &ReadoutParams,
+        now: u64,
+    ) -> (Vec<(u32, f32)>, Vec<(u32, f32)>) {
+        let dump = |m: &HashMap<u32, Cell>| {
+            let mut out: Vec<(u32, f32)> = m
+                .iter()
+                .map(|(&u, c)| (u, Self::value(p, Some(c), now)))
+                .collect();
+            out.sort_unstable_by_key(|&(u, _)| u);
+            out
+        };
+        (dump(&self.use_w), dump(&self.skip_w))
     }
 }
 

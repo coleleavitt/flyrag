@@ -10,14 +10,17 @@ use crate::text::TextEncoder;
 
 /// A document id (insertion order).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DocId(pub u32);
 
 /// The handle of one query's results; feedback names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OfferId(pub u64);
 
 /// A verified outcome for an offered document.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Outcome {
     /// Using the document led to a verified success.
     Helped,
@@ -27,6 +30,7 @@ pub enum Outcome {
 
 /// What a piece of feedback did.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Learned {
     /// The bank moved by `step` (prediction error `delta`).
     Updated {
@@ -43,6 +47,7 @@ pub enum Learned {
 
 /// What the novelty filter remembers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum NoveltySource {
     /// Past queries: "have I been asked something like this?" (the prereg).
     Queries,
@@ -52,6 +57,7 @@ pub enum NoveltySource {
 
 /// Every constant (the prereg's values are [`RagParams::prereg`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RagParams {
     /// Feature buckets `d`.
     pub dim: usize,
@@ -118,6 +124,7 @@ impl RagParams {
 
 /// One ranked result.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Ranked {
     /// The document.
     pub doc: DocId,
@@ -132,6 +139,7 @@ pub struct Ranked {
 
 /// A query's answer.
 #[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Answer {
     /// The handle for feedback on these results.
     pub offer: OfferId,
@@ -147,6 +155,7 @@ pub struct Answer {
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 struct Offer {
     units: Vec<u32>,
     docs: HashSet<u32>,
@@ -155,6 +164,7 @@ struct Offer {
 
 /// A FlyRAG store.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FlyRag {
     params: RagParams,
     encoder: TextEncoder,
@@ -438,9 +448,58 @@ impl FlyRag {
             .map_or(0, |b| b.moved_units(&self.params.readout, self.clock))
     }
 
+    /// Remove `doc` from future query results. Idempotent: returns
+    /// `Ok(false)` when `doc` is missing or already tombstoned, `Ok(true)`
+    /// on the first removal. The document's banks stay in memory so an
+    /// outstanding offer can still settle (feedback() still accepts it, the
+    /// readout still moves) — this keeps the supersede→feedback window
+    /// safe. New queries do not see `doc` once this returns, regardless of
+    /// its banks' state.
+    pub fn tombstone(&mut self, doc: DocId) -> Result<bool> {
+        if doc.0 as usize >= self.banks.len() {
+            return Ok(false);
+        }
+        Ok(self.index.remove(doc.0)?)
+    }
+
+    /// `true` when [`FlyRag::tombstone`] has retired `doc`. A missing id
+    /// reads as `false`.
+    pub fn is_tombstoned(&self, doc: DocId) -> bool {
+        if doc.0 as usize >= self.banks.len() {
+            return false;
+        }
+        self.index.get(doc.0).is_none()
+    }
+
+    /// Current `(use, skip)` weights for every KC unit `doc`'s banks have
+    /// moved, after decay. Returns `None` for an unknown id. Untouched
+    /// units are implicit at the prior and omitted; the lists are ordered
+    /// by unit index. Intended for cert-stream introspection ("what did we
+    /// learn about memory M?") and for diagnostics tests — not a hot
+    /// path, allocates.
+    pub fn doc_weights(&self, doc: DocId) -> Option<DocWeights> {
+        let banks = self.banks.get(doc.0 as usize)?;
+        let (use_, skip) = banks.weights_by_unit(&self.params.readout, self.clock);
+        Some(DocWeights {
+            use_weights: use_,
+            skip_weights: skip,
+        })
+    }
+
     /// Heap bytes of the hasher, index codes and novelty filter (banks grow
     /// with feedback and are not counted).
     pub fn memory_bytes(&self) -> usize {
         self.hasher.memory_bytes() + self.novelty.cell_bytes()
     }
+}
+
+/// A single document's learned weights, as returned by
+/// [`FlyRag::doc_weights`]. Ordered by unit index.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DocWeights {
+    /// `(unit, w)` for each touched unit in the "use" bank.
+    pub use_weights: Vec<(u32, f32)>,
+    /// `(unit, w)` for each touched unit in the "skip" bank.
+    pub skip_weights: Vec<(u32, f32)>,
 }

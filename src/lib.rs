@@ -50,6 +50,8 @@ mod readout;
 mod text;
 
 pub use error::{FlyRagError, Result};
-pub use rag::{Answer, DocId, FlyRag, Learned, NoveltySource, OfferId, Outcome, RagParams, Ranked};
+pub use rag::{
+    Answer, DocId, DocWeights, FlyRag, Learned, NoveltySource, OfferId, Outcome, RagParams, Ranked,
+};
 pub use readout::ReadoutParams;
 pub use text::TextEncoder;

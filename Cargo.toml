@@ -20,12 +20,24 @@ unsafe_code = "forbid"
 unwrap_used = "deny"
 
 [workspace.dependencies]
-# kenyon is a private repo until it is published; pinned by rev. Bump it deliberately.
-kenyon = { git = "https://github.com/coleleavitt/kenyon.git", rev = "a6fbb0474071d813b63bb7ea4852e56967e61e32" }
+# kenyon is public (github.com/coleleavitt/kenyon). Pinned by rev — bump
+# deliberately; kenyon's RNG constants are a bit-level stability surface
+# (see its README) that persisted downstream state depends on.
+kenyon = { git = "https://github.com/coleleavitt/kenyon.git", rev = "1a29b994a16ea3f54f613f30dd7a5112d18cdb24" }
 
 [lints]
 workspace = true
 
+[features]
+# Round-trip the state-bearing types (`FlyRag`, `Banks`, `RagParams`,
+# `TextEncoder`, `KcCode`, `FlyHash`, `FlyBloom`, `FlyIndex`) through
+# serde — downstream picks the format (bincode/postcard/json).
+serde = ["dep:serde", "kenyon/serde"]
+
 [dependencies]
 kenyon = { workspace = true }
 thiserror = "2"
+serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+serde_json = "1"
