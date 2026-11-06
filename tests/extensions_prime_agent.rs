@@ -101,6 +101,47 @@ fn doc_weights_is_none_for_an_unknown_id() {
 }
 
 #[test]
+fn compact_reclaims_tombstoned_docs_and_remaps_live_ids() {
+    use flyrag::{DocId, Outcome};
+    let mut rag = seeded();
+    // `seeded` adds 4 docs with ids 0..=3 by construction.
+    let (victim_a, victim_b, survivor_a, survivor_b) =
+        (DocId(0), DocId(1), DocId(2), DocId(3));
+
+    // Train a readout on a survivor so we can verify it comes along
+    // through the compact: ids change but the banks follow.
+    rag.feedback_detached(survivor_a, Outcome::Helped).unwrap();
+    let before = rag.doc_weights(survivor_a).unwrap();
+
+    rag.tombstone(victim_a).unwrap();
+    rag.tombstone(victim_b).unwrap();
+    assert_eq!(rag.len(), 4, "len() counts slots including tombstoned");
+
+    let (mapping, dropped) = rag.compact();
+    assert_eq!(dropped, 2);
+    assert_eq!(rag.len(), 2, "two slots freed");
+    assert!(!mapping.contains_key(&victim_a));
+    assert!(!mapping.contains_key(&victim_b));
+
+    let survivor_a_new = *mapping.get(&survivor_a).expect("remapped");
+    let survivor_b_new = *mapping.get(&survivor_b).expect("remapped");
+    // Ascending-old-id order: survivor_a (old DocId(2)) lands at new
+    // DocId(0); survivor_b (old DocId(3)) lands at new DocId(1).
+    assert_eq!(survivor_a_new, DocId(0));
+    assert_eq!(survivor_b_new, DocId(1));
+
+    // The learned weights for survivor_a travel to its new id.
+    let after = rag.doc_weights(survivor_a_new).unwrap();
+    assert_eq!(after.use_weights, before.use_weights);
+
+    // Further feedback on the NEW id still trains. Training uses the
+    // post-compact ids; the old DocId is now a stale reference.
+    let moved_before = rag.moved_units(survivor_b_new);
+    rag.feedback_detached(survivor_b_new, Outcome::Misled).unwrap();
+    assert!(rag.moved_units(survivor_b_new) > moved_before);
+}
+
+#[test]
 fn feedback_detached_moves_the_readout_without_an_offer() {
     use flyrag::{DocId, Learned, Outcome};
     let mut rag = seeded();

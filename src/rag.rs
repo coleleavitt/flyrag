@@ -528,6 +528,80 @@ impl FlyRag {
         self.index.get(doc.0).is_none()
     }
 
+    /// Reclaim the memory held by tombstoned docs. Calls through to
+    /// [`kenyon::FlyIndex::compact`] and remaps every parallel vector
+    /// (`banks`, `doc_units`) + the open offer table's doc sets in the
+    /// returned `old -> new` mapping. Returns `(mapping, dropped)` so
+    /// a downstream reranker that keeps its own id maps (e.g. a
+    /// `memory_id -> DocId` string map) can update them consistently.
+    ///
+    /// A `dropped == 0` call is a no-op and returns a complete identity
+    /// mapping (every live id → itself) so callers don't branch.
+    ///
+    /// # IDs are invalidated
+    ///
+    /// Every pre-compact `DocId` is invalid after this call. A live
+    /// doc moves to the id `mapping[old]`; a tombstoned doc is gone
+    /// entirely and any held id now aliases the live doc that happens
+    /// to land at that index. Callers MUST translate every outstanding
+    /// id through the mapping before using it again; feeding a stale
+    /// id to `feedback_detached` / `doc_weights` is a silent
+    /// aliasing bug, not a `Result::Err`.
+    ///
+    /// Not a hot path: allocates proportional to live doc count. Run
+    /// periodically from downstream (not every turn).
+    pub fn compact(&mut self) -> (std::collections::HashMap<DocId, DocId>, usize) {
+        let (raw, dropped) = self.index.compact();
+        let mapping: std::collections::HashMap<DocId, DocId> = raw
+            .iter()
+            .map(|(&old, &new)| (DocId(old), DocId(new)))
+            .collect();
+        if dropped == 0 {
+            return (mapping, 0);
+        }
+
+        // Rebuild banks + doc_units in the new id order. Dead slots
+        // drop out, surviving ones land at mapping[old].
+        let live_count = self.banks.len() - dropped;
+        let mut new_banks: Vec<Banks> = Vec::with_capacity(live_count);
+        let mut new_units: Vec<Vec<u32>> = Vec::with_capacity(live_count);
+        // Walk old ids ascending — matches kenyon's assignment order,
+        // so new_id == new_banks.len() at the moment of push.
+        for (old_idx, (banks, units)) in self
+            .banks
+            .drain(..)
+            .zip(self.doc_units.drain(..))
+            .enumerate()
+        {
+            if raw.contains_key(&(old_idx as u32)) {
+                new_banks.push(banks);
+                new_units.push(units);
+            }
+        }
+        self.banks = new_banks;
+        self.doc_units = new_units;
+
+        // Remap every open offer's `docs` set. Offers that referenced a
+        // tombstoned doc lose that entry — a later feedback on it was
+        // already going to fail with NotOffered.
+        for offer in self.offers.values_mut() {
+            let remapped: HashSet<u32> = offer
+                .docs
+                .iter()
+                .filter_map(|old| raw.get(old).copied())
+                .collect();
+            let remapped_answered: HashSet<u32> = offer
+                .answered
+                .iter()
+                .filter_map(|old| raw.get(old).copied())
+                .collect();
+            offer.docs = remapped;
+            offer.answered = remapped_answered;
+        }
+
+        (mapping, dropped)
+    }
+
     /// Current `(use, skip)` weights for every KC unit `doc`'s banks have
     /// moved, after decay. Returns `None` for an unknown id. Untouched
     /// units are implicit at the prior and omitted; the lists are ordered

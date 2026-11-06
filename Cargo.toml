@@ -23,7 +23,7 @@ unwrap_used = "deny"
 # kenyon is public (github.com/coleleavitt/kenyon). Pinned by rev — bump
 # deliberately; kenyon's RNG constants are a bit-level stability surface
 # (see its README) that persisted downstream state depends on.
-kenyon = { git = "https://github.com/coleleavitt/kenyon.git", rev = "1a29b994a16ea3f54f613f30dd7a5112d18cdb24" }
+kenyon = { git = "https://github.com/coleleavitt/kenyon.git", rev = "e1dc0c2b05e586da237d5718f231405aac9dc2e5" }
 
 [lints]
 workspace = true
